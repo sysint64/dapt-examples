@@ -1,0 +1,69 @@
+module processors.builder;
+
+import std.traits;
+import std.string;
+import std.container.array;
+
+import dapt.type;
+import dapt.func;
+import dapt.eclass;
+import dapt.processor;
+import dapt.emitter;
+
+import annotation;
+
+void process(Processor processor) {
+    #foreachTypes {
+        #importType;
+
+        FileOpenMode mode;
+
+        static if (hasUDA!(#type, Builder)) {
+            mode = processor.openFile("#typeModuleFile"[0..$-2] ~ "_builder.d");
+
+            if (mode == FileOpenMode.write) {
+                processor.add(new ModuleEmittable("#typeModuleName" ~ "_builder"));
+                processor.addln();
+                processor.add(new StringEmittable("import #typeModuleName;\n"));
+            }
+
+            auto classBuilder = new EClass.Builder()
+                .setName("#type" ~ "Builder");
+
+            Array!StringEmittable buildArguments;
+
+            foreach (member; __traits(allMembers, #type)) {
+                alias memberType = typeof(mixin("#type." ~ member));
+
+                static if (!isBuiltinType!(memberType))
+                    processor.add(StringEmittable.create("import $L;\n", moduleName!memberType));
+
+                classBuilder.addArgument(Argument.create(member, memberType.stringof, "private"));
+                auto methodBuilder = new Function.Builder()
+                    .setName("set" ~ capitalize(member))
+                    .addArgument(Argument.create(member, memberType.stringof, "in"))
+                    .addStatement("this.$L = $L;", member, member)
+                    .setReturnType(Type.createPrimitiveType("void"));
+
+                classBuilder.addFunction(methodBuilder.build());
+                buildArguments.insert(new StringEmittable("    this." ~ member));
+            }
+
+            auto methodBuilder = new Function.Builder()
+                .setName("build")
+                .setReturnType(Type.createPrimitiveType("#type"));
+
+            if (!buildArguments.empty()) {
+                methodBuilder.addStatement("return #type(\n$A<,\n>\n);", buildArguments);
+            } else {
+                methodBuilder.addStatement("return #type();");
+            }
+
+            classBuilder.addFunction(methodBuilder.build());
+
+            processor.addln();
+            processor.add(classBuilder.build());
+            processor.closeFile();
+        }
+    }
+}

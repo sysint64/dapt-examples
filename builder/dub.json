@@ -1,0 +1,32 @@
+{
+    "name": "builder",
+    "authors": [
+	"Andrey"
+    ],
+    "description": "A minimal D application.",
+    "copyright": "Copyright © 2017, Andrey",
+    "license": "proprietary",
+    "dependencies": {
+        ":dapt": "*"
+    },
+    "subPackages": [
+        {
+            "name": "dapt",
+            "targetType": "library",
+            "sourcePaths": [
+                "../dapt/src"
+            ],
+            "importPaths": [
+                "../dapt/src"
+            ]
+        }
+    ],
+    "preGenerateCommands": [
+        "cd \"$${DUB_PACKAGE_DIR}\" && ./pre_generate.sh"
+    ],
+    "buildTypes": {
+        "dapt": {
+            "versions": ["daptProcessingVersion"]
+        }
+    }
+}
