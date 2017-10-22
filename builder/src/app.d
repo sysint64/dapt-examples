@@ -1,7 +1,7 @@
 import std.stdio;
 
 void main() {
-    version (daptProcessingVersion) {
+    debug {
         import processors.entry;
         daptProcess();
     }

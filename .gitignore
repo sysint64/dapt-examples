@@ -23,6 +23,6 @@ docs/
 # Code coverage
 *.lst
 
-builder/src/*_builder.d
-builder/src/processors/*.d
-generated_files.txt
+# builder/src/*_builder.d
+# builder/src/processors/*.d
+dapt_generated_files.txt
