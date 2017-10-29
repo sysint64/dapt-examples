@@ -9,7 +9,7 @@ import std.container.array;
 
 import dapt.processor;
 import dapt.emitter;
-import dapt.eclass;
+import dapt.block;
 import dapt.func;
 import dapt.type;
 
@@ -17,10 +17,11 @@ import components;
 
 struct Data {
     Processor processor;
-    EClass.Builder entityManagerClassBuilder;
-    EClass.Builder entityClassBuilder;
-    EClass.Builder[string] groupClassBuilders;
-    Function.Builder attachComponentBuilder;
+    Array!IEmittable imports;
+    Block.Builder entityManagerClassBuilder;
+    Block.Builder entityClassBuilder;
+    Block.Builder[string] groupClassBuilders;
+    Function.Builder resolveNodesBuilder;
 }
 
 string getTypeCamelName(T)() {
@@ -73,20 +74,20 @@ void placingArrays(T)(ref Data data, in string name, in string group) {
 
     if (group == "") {
         data.entityManagerClassBuilder
-            .addArgument(Argument.create(arrayName, "Array!" ~ typeName));
+            .addDeclaration(Argument.create(arrayName, "Array!" ~ typeName));
     } else {
         const groupClassName = capitalize(group) ~ "Group";
 
         if (group !in data.groupClassBuilders) {
-            data.groupClassBuilders[group] = new EClass.Builder(true)
+            data.groupClassBuilders[group] = new Block.Builder(BlockType.struct_)
                 .setName(groupClassName);
 
             data.entityManagerClassBuilder
-                .addArgument(Argument.create(group, groupClassName));
+                .addDeclaration(Argument.create(group, groupClassName));
         }
 
         data.groupClassBuilders[group]
-            .addArgument(Argument.create(arrayName, "Array!" ~ typeName));
+            .addDeclaration(Argument.create(arrayName, "Array!" ~ typeName));
     }
 }
 
@@ -101,7 +102,7 @@ void resolveNodes(T)(ref Data data) {
                 mixin("alias type = typeof(#type." ~ member ~ ");");
 
                 if (is(type == T*) || is(type == T)) {
-                    data.attachComponentBuilder
+                    data.resolveNodesBuilder
                         .addStatement("// Check node: #type");
 
                     checkNode = true;
@@ -109,7 +110,7 @@ void resolveNodes(T)(ref Data data) {
             }
 
             if (checkNode) {
-                data.attachComponentBuilder.openScope();
+                data.resolveNodesBuilder.openScope();
 
                 enum members = __traits(allMembers, #type);
                 Array!StringEmittable nodeMembers;
@@ -117,13 +118,13 @@ void resolveNodes(T)(ref Data data) {
                 foreach (immutable member; members) {
                     mixin("alias type = typeof(#type." ~ member ~ ");");
 
-                    data.attachComponentBuilder
+                    data.resolveNodesBuilder
                         .addStatement("$L $L;", type.stringof, member);
 
                     nodeMembers.insert(new StringEmittable(member));
                 }
 
-                data.attachComponentBuilder
+                data.resolveNodesBuilder
                     .addStatement("");
 
                 foreach (immutable member; members) {
@@ -139,7 +140,7 @@ void resolveNodes(T)(ref Data data) {
                         mixin("alias derefType = " ~ typeName ~ ";");
                         const componentsAccessor = getAccessor!(derefType, Component)("Component");
 
-                        data.attachComponentBuilder
+                        data.resolveNodesBuilder
                             .addStatement("int componentsCount = 1;\n")
                             .openScope("if (typeid($L) in components)", typeName)
                             .addStatement("const index = components[typeid($L)];", typeName)
@@ -152,16 +153,23 @@ void resolveNodes(T)(ref Data data) {
 
                 const nodesAccessor = getAccessor!(#type, Node)("Node");
 
-                data.attachComponentBuilder
+                data.resolveNodesBuilder
                     .openScope("if (componentsCount == $L)", members.length)
                     .addStatement("manager.$L.insert(#type($A<,>));", nodesAccessor, nodeMembers)
                     .closeScope()
                     .addStatement("");
 
-                data.attachComponentBuilder.closeScope();
+                data.resolveNodesBuilder.closeScope();
             }
         }
     }
+}
+
+void addImport(ref Data data, IEmittable emittable) {
+    data.entityManagerClassBuilder.addStatement(emittable);
+    data.entityClassBuilder.addStatement(emittable);
+
+    data.processor.add(emittable);
 }
 
 void process(Processor processor) {
@@ -174,19 +182,20 @@ void process(Processor processor) {
 
     processor.add(new ModuleEmittable("entity_generated"));
     processor.addln();
-    processor.add(new ImportEmittable("std.container.array"));
-    processor.addln();
-    processor.add(new ImportEmittable("entity"));
-    processor.addln();
 
-    data.attachComponentBuilder = new Function.Builder()
-        .setName("attachComponent(T)")
+    data.resolveNodesBuilder = new Function.Builder()
+        .setName("resolveNodes(T)")
         .addArgument(Argument.create("component", "T"))
         .setReturnType(Type.createPrimitiveType("Entity"));
 
-    data.entityManagerClassBuilder = new EClass.Builder().setName("EntityManagerMixin");
-    data.entityClassBuilder = new EClass.Builder()
-        .setName("EntityMixin");
+    data.entityManagerClassBuilder = new Block.Builder(BlockType.mixin_template)
+        .setName("EntityManagerMixin()");
+
+    data.entityClassBuilder = new Block.Builder(BlockType.mixin_template)
+        .setName("EntityMixin()");
+
+    addImport(data, new ImportEmittable("std.container.array"));
+    // addImport(data, new ImportEmittable("entity"));
 
     #foreachTypes {
         #importType;
@@ -195,7 +204,7 @@ void process(Processor processor) {
             enum componentUDA = getUDAs!(#type, Component)[0];
             const componentGroup = getGroupFromAttribute!(componentUDA);
 
-            processor.add(new ImportEmittable("#typeModuleName : #type"));
+            addImport(data, new ImportEmittable("#typeModuleName : #type"));
             placingArrays!(#type)(data, "Component", componentGroup);
         } else
 
@@ -203,7 +212,7 @@ void process(Processor processor) {
             enum nodeUDA = getUDAs!(#type, Node)[0];
             const nodeGroup = getGroupFromAttribute!(nodeUDA);
 
-            processor.add(new ImportEmittable("#typeModuleName : #type"));
+            addImport(data, new ImportEmittable("#typeModuleName : #type"));
             placingArrays!(#type)(data, "Node", nodeGroup);
         }
     }
@@ -216,7 +225,7 @@ void process(Processor processor) {
         static if (hasUDA!(#type, Component)) {
             const accessor = getAccessor!(#type, Component)("Component");
 
-            data.attachComponentBuilder
+            data.resolveNodesBuilder
                 .openScope("static if (is(T == #type))")
                 .addStatement("manager.$L.insert(component);", accessor)
                 .addStatement("components[typeid(component)] = manager.$L.length - 1;", accessor)
@@ -224,7 +233,7 @@ void process(Processor processor) {
 
             resolveNodes!(#type)(data);
 
-            data.attachComponentBuilder
+            data.resolveNodesBuilder
                 .closeScope()
                 .addStatement("");
         }
@@ -240,8 +249,8 @@ void process(Processor processor) {
     processor.add(data.entityManagerClassBuilder.build());
     processor.addln();
 
-    data.attachComponentBuilder.addStatement("return this;");
-    data.entityClassBuilder.addFunction(data.attachComponentBuilder.build());
+    data.resolveNodesBuilder.addStatement("return this;");
+    data.entityClassBuilder.addStatement(data.resolveNodesBuilder.build());
 
     processor.add(data.entityClassBuilder.build());
     processor.closeFile();

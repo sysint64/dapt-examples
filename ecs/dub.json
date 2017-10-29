@@ -18,6 +18,9 @@
     "buildTypes": {
         "dapt": {
             "versions": ["daptProcessingVersion"]
+        },
+        "debug": {
+            "versions": ["notDaptProcessingVersion"]
         }
     }
 }

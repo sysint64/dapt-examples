@@ -1,9 +1,6 @@
 module entity_generated;
 
 import std.container.array;
-
-import entity;
-
 import components : PositionComponent;
 import components : VelocityComponent;
 import components : Color;
@@ -12,32 +9,53 @@ import components : MoveNode;
 import components : RenderNode;
 
 struct PhysicsGroup {
-    Array!MoveNode moveNodes;
-  
-    
+        Array!MoveNode moveNodes;
 }
 
 struct GapiGroup {
-    Array!Color colorComponents;
+        Array!Color colorComponents;
     Array!FigureComponent figureComponents;
     Array!RenderNode renderNodes;
-  
-    
 }
 
-class EntityManagerMixin {
-    Array!PositionComponent positionComponents;
-    Array!VelocityComponent velocityComponents;
-    GapiGroup gapi;
-    PhysicsGroup physics;
-  
-    
-}
-
-class EntityMixin {
-    
+mixin template EntityManagerMixin() {
         
-    Entity attachComponent(T)(T component) {
+    import std.container.array;
+    
+    import components : PositionComponent;
+    Array!PositionComponent positionComponents;
+    
+    import components : VelocityComponent;
+    Array!VelocityComponent velocityComponents;
+    
+    import components : Color;
+    GapiGroup gapi;
+    
+    import components : FigureComponent;
+    
+    import components : MoveNode;
+    PhysicsGroup physics;
+    
+    import components : RenderNode;
+}
+
+mixin template EntityMixin() {
+        
+    import std.container.array;
+    
+    import components : PositionComponent;
+    
+    import components : VelocityComponent;
+    
+    import components : Color;
+    
+    import components : FigureComponent;
+    
+    import components : MoveNode;
+    
+    import components : RenderNode;
+    
+    Entity resolveNodes(T)(T component) {
         static if (is(T == PositionComponent)) {
             manager.positionComponents.insert(component);
             components[typeid(component)] = manager.positionComponents.length - 1;
@@ -136,5 +154,4 @@ class EntityMixin {
         
         return this;
     }
-
 }
