@@ -5,32 +5,71 @@ import std.path;
 import std.string;
 import std.uni;
 import std.conv;
+import std.container.array;
 
 import dapt.processor;
 import dapt.emitter;
 import dapt.eclass;
 import dapt.func;
+import dapt.type;
 
 import components;
 
 struct Data {
     Processor processor;
     EClass.Builder entityManagerClassBuilder;
+    EClass.Builder entityClassBuilder;
     EClass.Builder[string] groupClassBuilders;
+    Function.Builder attachComponentBuilder;
 }
 
-void processComponent(T)(ref Data data, in string group) {
+string getTypeCamelName(T)() {
     const typeName = T.stringof;
-    const typeCamelName = typeName.length > 1 ? typeName[0].toLower().to!string ~ typeName[1..$]
-                                              : typeName[0].toLower().to!string;
 
+    if (typeName.length > 1) {
+        return typeName[0].toLower().to!string ~ typeName[1..$];
+    } else {
+        return typeName[0].toLower().to!string;
+    }
+}
+
+string getArrayName(T)(in string name) {
+    const typeCamelName = getTypeCamelName!(T);
     string arrayName = typeCamelName;
 
-    if (typeCamelName.length > 9 && typeCamelName[$-9..$] == "Component") {
+    if (typeCamelName.length > name.length && typeCamelName[$-name.length..$] == name) {
         arrayName ~= "s";
     } else {
-        arrayName ~= "Components";
+        arrayName ~= name ~ "s";
     }
+
+    return arrayName;
+}
+
+string getGroupFromAttribute(alias uda)() {
+    static if (isType!uda) {
+        return "";
+    } else {
+        return uda.group;
+    }
+}
+
+string getAccessor(T, U)(in string name) {
+    string accessor = getArrayName!(T)(name);
+    enum uda = getUDAs!(T, U)[0];
+    const group = getGroupFromAttribute!(uda);
+
+    if (group != "") {
+        accessor = group ~ "." ~ accessor;
+    }
+
+    return accessor;
+}
+
+void placingArrays(T)(ref Data data, in string name, in string group) {
+    const typeName = T.stringof;
+    const typeCamelName = getTypeCamelName!(T);
+    const arrayName = getArrayName!(T)(name);
 
     if (group == "") {
         data.entityManagerClassBuilder
@@ -51,6 +90,80 @@ void processComponent(T)(ref Data data, in string group) {
     }
 }
 
+void resolveNodes(T)(ref Data data) {
+    #foreachTypes {
+        #importType;
+
+        static if (hasUDA!(#type, Node)) {
+            bool checkNode = false;
+
+            foreach (immutable member; __traits(allMembers, #type)) {
+                mixin("alias type = typeof(#type." ~ member ~ ");");
+
+                if (is(type == T*) || is(type == T)) {
+                    data.attachComponentBuilder
+                        .addStatement("// Check node: #type");
+
+                    checkNode = true;
+                }
+            }
+
+            if (checkNode) {
+                data.attachComponentBuilder.openScope();
+
+                enum members = __traits(allMembers, #type);
+                Array!StringEmittable nodeMembers;
+
+                foreach (immutable member; members) {
+                    mixin("alias type = typeof(#type." ~ member ~ ");");
+
+                    data.attachComponentBuilder
+                        .addStatement("$L $L;", type.stringof, member);
+
+                    nodeMembers.insert(new StringEmittable(member));
+                }
+
+                data.attachComponentBuilder
+                    .addStatement("");
+
+                foreach (immutable member; members) {
+                    mixin("alias type = typeof(#type." ~ member ~ ");");
+
+                    static if (!is(type == T*) && !is(type == T)) {
+                        static if (isPointer!(type)) {
+                            const typeName = type.stringof[0..$-1];
+                        } else {
+                            const typeName = type.stringof;
+                        }
+
+                        mixin("alias derefType = " ~ typeName ~ ";");
+                        const componentsAccessor = getAccessor!(derefType, Component)("Component");
+
+                        data.attachComponentBuilder
+                            .addStatement("int componentsCount = 1;\n")
+                            .openScope("if (typeid($L) in components)", typeName)
+                            .addStatement("const index = components[typeid($L)];", typeName)
+                            .addStatement("$L = &manager.$L[index];", member, componentsAccessor)
+                            .addStatement("++componentsCount;")
+                            .closeScope()
+                            .addStatement("");
+                    }
+                }
+
+                const nodesAccessor = getAccessor!(#type, Node)("Node");
+
+                data.attachComponentBuilder
+                    .openScope("if (componentsCount == $L)", members.length)
+                    .addStatement("manager.$L.insert(#type($A<,>));", nodesAccessor, nodeMembers)
+                    .closeScope()
+                    .addStatement("");
+
+                data.attachComponentBuilder.closeScope();
+            }
+        }
+    }
+}
+
 void process(Processor processor) {
     Data data;
 
@@ -63,30 +176,57 @@ void process(Processor processor) {
     processor.addln();
     processor.add(new ImportEmittable("std.container.array"));
     processor.addln();
+    processor.add(new ImportEmittable("entity"));
+    processor.addln();
 
-    auto entityManagerClassBuilder = new EClass.Builder()
-        .setName("EntityManagerMixin");
+    data.attachComponentBuilder = new Function.Builder()
+        .setName("attachComponent(T)")
+        .addArgument(Argument.create("component", "T"))
+        .setReturnType(Type.createPrimitiveType("Entity"));
 
-    data.entityManagerClassBuilder = entityManagerClassBuilder;
+    data.entityManagerClassBuilder = new EClass.Builder().setName("EntityManagerMixin");
+    data.entityClassBuilder = new EClass.Builder()
+        .setName("EntityMixin");
 
     #foreachTypes {
         #importType;
 
         static if (hasUDA!(#type, Component)) {
-            auto componentUDA = getUDAs!(#type, Component)[0];
-            string componentGroup = "";
-
-            static if (isType!componentUDA) {
-                componentGroup = "";
-            } else {
-                componentGroup = componentUDA.group;
-            }
+            enum componentUDA = getUDAs!(#type, Component)[0];
+            const componentGroup = getGroupFromAttribute!(componentUDA);
 
             processor.add(new ImportEmittable("#typeModuleName : #type"));
-            processComponent!(#type)(data, componentGroup);
-        }
+            placingArrays!(#type)(data, "Component", componentGroup);
+        } else
 
         static if (hasUDA!(#type, Node)) {
+            enum nodeUDA = getUDAs!(#type, Node)[0];
+            const nodeGroup = getGroupFromAttribute!(nodeUDA);
+
+            processor.add(new ImportEmittable("#typeModuleName : #type"));
+            placingArrays!(#type)(data, "Node", nodeGroup);
+        }
+    }
+
+    // handle attachComponent method
+
+    #foreachTypes {
+        #importType;
+
+        static if (hasUDA!(#type, Component)) {
+            const accessor = getAccessor!(#type, Component)("Component");
+
+            data.attachComponentBuilder
+                .openScope("static if (is(T == #type))")
+                .addStatement("manager.$L.insert(component);", accessor)
+                .addStatement("components[typeid(component)] = manager.$L.length - 1;", accessor)
+                .addStatement("");
+
+            resolveNodes!(#type)(data);
+
+            data.attachComponentBuilder
+                .closeScope()
+                .addStatement("");
         }
     }
 
@@ -94,8 +234,15 @@ void process(Processor processor) {
 
     foreach (key, builder; data.groupClassBuilders) {
         processor.add(builder.build());
+        processor.addln();
     }
 
-    processor.add(entityManagerClassBuilder.build());
+    processor.add(data.entityManagerClassBuilder.build());
+    processor.addln();
+
+    data.attachComponentBuilder.addStatement("return this;");
+    data.entityClassBuilder.addFunction(data.attachComponentBuilder.build());
+
+    processor.add(data.entityClassBuilder.build());
     processor.closeFile();
 }

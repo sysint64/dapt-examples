@@ -25,6 +25,12 @@ struct PositionComponent {
     float y;
 }
 
+@Component()
+struct VelocityComponent {
+    float dx;
+    float dy;
+}
+
 @Component("gapi")
 struct Color {
     float r;
@@ -39,10 +45,10 @@ struct FigureComponent {
     Array!Vector2 points;
 }
 
-@Node
+@Node("physics")
 struct MoveNode {
     PositionComponent* position;
-    PositionComponent* velocity;
+    VelocityComponent* velocity;
 }
 
 @Node("gapi")
